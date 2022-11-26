@@ -4,10 +4,6 @@
 
 declare -A matrix
 
-declare -A readsArray
-declare -A writesArray
-declare -A pid_data
-
 # O código estará separado em 4 grandes áreas:
 # VP-Verificação de Parâmetros -> lugar onde se verifica que parâmetros estão presentes nos argumentos, e onde é feita a sua validação
 # LRP-Leitura e Registo de Processos -> lugar onde é feita a leitura do /proc/ e onde se guarda os valores relevantes relativos a processos
@@ -24,21 +20,21 @@ usage() { echo "Usage: $0 [-c <regex>] [-s <mindate>] [-e <maxdate>] [-u <user>]
 
 regex_positive_int='^[0-9]+$'
 
-while getopts ":c:s:e:u:m:M:p:r:w:" o; do
+while getopts ":c:s:e:u:m:M:p:rw" o; do
     case "${o}" in
         c)
-                c=${OPTARG}
+                c="^${OPTARG}$"
                 ;;
         s)
-                s=$(date -d '${OPTARG}' +"%s")
+                s=$(date -d "${OPTARG}" +"%s")
                 if ! [ $? == 0 ]; then
-                        continue
+                        usage
                 fi
                 ;;
         e)
-                e=$(date -d '${OPTARG}' +"%s")
+                e=$(date -d "${OPTARG}" +"%s")
                 if ! [ $? == 0 ]; then
-                        continue
+                        usage
                 fi
                 ;;
         u)
@@ -58,7 +54,7 @@ while getopts ":c:s:e:u:m:M:p:r:w:" o; do
                 ;;
         p)
                 p=${OPTARG}
-                if ! [[ $P =~ $regex_positive_int ]] ; then
+                if ! [[ $p =~ $regex_positive_int ]] ; then
                         usage
                 fi
                 ;;
@@ -69,8 +65,8 @@ while getopts ":c:s:e:u:m:M:p:r:w:" o; do
                 column=5
                 ;;
         *)
-            usage
-            ;;
+                usage
+                ;;
     esac
 done
 shift $((OPTIND-1))
@@ -78,7 +74,6 @@ shift $((OPTIND-1))
 if [ -z "$1" ] || ! [[ $1 =~ $regex_positive_int ]] ; then
         usage
 fi
-
 sleep_time=$1
 
 # LRP - Leitura e Registo de Processos
@@ -93,13 +88,13 @@ do
 
         cat /proc/$line/comm &> /dev/null
         # Condição que verifica se temos permissão para aceder ao processo, bem como se o PID pertence ao intervalo que pode (ou não) ser dado
-        if [ $? == 1 ] || { ! [ -z "${m}" ] && [ "$line" < "$m" ]; } || { ! [ -z "${M}" ] && [ "$line" < "$M" ]; }; then
+        if ! [ $? == 0 ] || { ! [ -z "${m}" ] && [ "$line" -lt "$m" ]; } || { ! [ -z "${M}" ] && [ "$line" -gt "$M" ]; }; then
                 continue
         fi
 
         comm=$(cat /proc/$line/comm)
         # Condição que verifica se o nome do processo cumpre o regex que pode (ou não) ser dado
-        if ! [ -z "${c}" ] && ! [[ "$comm" =~ "$c" ]]; then
+        if ! [ -z "${c}" ] && ! [[ $comm =~ $c ]]; then
                 continue
         fi
 
@@ -108,15 +103,15 @@ do
         #         continue
         # fi
 
-        user=$(ps -o user $pid | grep -v 'USER')
+        user=$(ps -o user $line | grep -v 'USER')
         # Condição que verifica se o user do processo é o mesmo que o que pode (ou não) ser dado
         if ! [ -z "${u}" ] && ! [ "$u" == "$user" ]; then
                 continue
         fi
 
-        date_epoch=$(stat -c %Y /proc/$pid)
+        date_epoch=$(stat -c %Y /proc/$line)
         # Condição que verifica se a data do processo está de acordo com o intervalo que pode (ou não) ser dado
-        if { ! [ -z "${s}" ] && [ "$date_epoch" < "$s" ]; } || { ! [ -z "${e}" ] && [ "$date_epoch" < "$e" ]; }; then
+        if { ! [ -z "${s}" ] && [ "$date_epoch" -lt "$s" ]; } || { ! [ -z "${e}" ] && [ "$date_epoch" -gt "$e" ]; }; then
                 continue
         fi
         date_readable=$(date -d @$date_epoch +%b' '%e' '%k:%M)
@@ -128,77 +123,40 @@ do
         matrix[$i,3]=$line
         matrix[$i,4]=$(cat /proc/$line/io | grep "rchar:" | awk '{print $2}')
         matrix[$i,5]=$(cat /proc/$line/io | grep "wchar:" | awk '{print $2}')
-        matrix[$i,6]=$date_readable
-
-        #pid_data[$line]="$comm" "$user" "$line" "$(cat /proc/$line/io | grep "rchar:" | awk '{print $2}')" "$(cat /proc/$line/io | grep "wchar:" | awk '{print $2}')"\
-                 #"$date_readable"
-
-        #readsArray[$line]=$(cat /proc/$line/io | grep "rchar:" | awk '{print $2}')
-        #writesArray[$line]=$(cat /proc/$line/io | grep "wchar:" | awk '{print $2}')
+        matrix[$i,8]=$date_readable
         i=$((i + 1))
+
 done < <(ls -l /proc/ | awk '{print $9}' | grep -x -E '[0-9]+')
 
 # Este sleep tem que ser feito para podermos calcular o rateR e o rateW, que necessitam de uma medição de tempo
 sleep $sleep_time
 
-
-
 # OID - Ordenação de Informação para Display
 
+for ((j=1;j<$i;j++)) do
+        cat /proc/${matrix[$j,3]}/comm &> /dev/null
+        if ! [ $? == 0 ]; then
+                continue
+        fi
+        finalr=$(cat /proc/${matrix[$j,3]}/io | grep "rchar:" | awk '{print $2}')
+        finalw=$(cat /proc/${matrix[$j,3]}/io | grep "wchar:" | awk '{print $2}')
+        matrix[$j,6]=$(echo "scale=2; ($finalr-${matrix[$j,4]}) / $sleep_time" | bc)
+        matrix[$j,7]=$(echo "scale=2; ($finalw-${matrix[$j,5]}) / $sleep_time" | bc)
+        matrix[$j,4]=$finalr
+        matrix[$j,5]=$finalw
+done
+
+# DI - Display de Informação
 
 printf "%-20s%-9s%6s%11s%12s%11s%14s%14s\n" "COMM" "USER" "PID" "READB" "WRITEB" "RATER"\
         "RATEW" "DATE"
 
-for k in "${!matrix[@]}"
-do
-    echo $k ' - ' ${matrix["$k,3"]}
+for ((j=1;j<$i;j++)) do
+        cat /proc/${matrix[$j,3]}/comm &> /dev/null
+        if ! [ $? == 0 ]; then
+                continue
+        fi
+        printf "%-20s \b%-9s \b%6s \b%11s \b%12s \b%12s \b%14s \b%14s\n" "${matrix[$j,1]}" "${matrix[$j,2]}" "${matrix[$j,3]}" "${matrix[$j,4]}" "${matrix[$j,5]}"\
+                "${matrix[$j,6]}" "${matrix[$j,7]}" "${matrix[$j,8]}"
 done |
-sort -"$reverse"n -k"$3"
-
-# DI - Display de Informação
-
-# for pid in "${!readsArray[@]}"; do
-#         date_epoch=$(stat -c %Y /proc/$pid)
-#         comm=$(cat /proc/$pid/comm)
-#         user=$(ps -o user $pid | grep -v 'USER')
-#         write2=$(cat /proc/$pid/io | grep "wchar:" | awk '{print $2}')
-#         read2=$(cat /proc/$pid/io | grep "rchar:" | awk '{print $2}')
-#         rater=$(echo "scale=2; ($read2-${readsArray[$pid]}) / $sleep_time" | bc)
-#         ratew=$(echo "scale=2; ($write2-${writesArray[$pid]}) / $sleep_time" | bc)
-#         # readsArray[$pid]=read2
-#         # writesArray[$pid]=write2
-#         pid_data[$pid]="$comm" "$user" "$pid" "$read2" "$write2"\
-#                 "$rater" "$ratew" "$date_epoch"
-# done
-
-
-
-# for pid in "${!pid_data[@]}"; do
-#         finalw=$(cat /proc/$pid/io | grep "wchar:" | awk '{print $2}')
-#         finalr=$(cat /proc/$pid/io | grep "rchar:" | awk '{print $2}')
-#         ratew=$(echo "scale=2; ($finalw-${pid_data[$5]}) / $sleep_time" | bc)
-#         rater=$(echo "scale=2; ($finalr-${pid_data[$4]}) / $sleep_time" | bc)
-#         # pid_data[$line]="$comm" "$user" "$line" "$(cat /proc/$line/io | grep "rchar:" | awk '{print $2}')" "$(cat /proc/$line/io | grep "wchar:" | awk '{print $2}')"\
-#                  #"$date_readable"
-#         printf "%-20s%-9s%6s%11s%12s%11s%14s%14s\n" "${pid_data[$pid,1]}" "${pid_data[$pid,2]}" "${pid_data[$pid,3]}" "$finalw" "$finalr"\
-#                 "$rater" "$ratew" "${pid_data[$pid,6]}"
-# done |
-# sort -"$reverse"n -k"$column"
-
-# reverse="" 
-# column=4
-# sort -"$reverse"n -k"$column"
-
-
-
-# if [ "$i" == "$p" ]; then
-        #         continue
-        # fi
-# fazer i=p check
-
-
-
-
-# date_readable=$(date -d @$date_epoch +%b' '%e' '%k:%M)
-# printf "%-20s%-9s%6s%11s%12s%11s%14s%14s\n" "$comm" "$user" "$pid" "$read2" "$write2"\
-                # "$rater" "$ratew" "$date_readable"
+sort -t $'\b' -"$reverse"g -k"$column" | ( ! [ -z "$p" ] && awk "NR<=$p" || awk "NR>0")
