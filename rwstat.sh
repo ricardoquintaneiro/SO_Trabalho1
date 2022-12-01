@@ -3,24 +3,20 @@
 # Aqui, em vez de declararmos arrays para read e write, podemos declarar uma matrix, em que cada linha é um processo e cada coluna é uma informação relativa ao processo
 
 declare -A matrix
-
-# O código estará separado em 4 grandes áreas:
-# VP-Verificação de Parâmetros -> lugar onde se verifica que parâmetros estão presentes nos argumentos, e onde é feita a sua validação
-# LRP-Leitura e Registo de Processos -> lugar onde é feita a leitura do /proc/ e onde se guarda os valores relevantes relativos a processos
-# OID-Ordenação de Informação para Display -> lugar onde, tendo a lista de processos a demonstrar, se faz a sua ordenação, de acordo com os argumentos        
-# DI-Display de Informação -> lugar onde se faz a escrita para a consola dos processos que queremos listar
-
-column=4
+column=6
 reverse=""
 
+export LC_NUMERIC="en_US.UTF-8"
+
 # Mensagem que demonstra quais opções podem ser utilizadas ao executar este ficheiro. Esta mensagem aparece quando os argumentos de entrada não estão bem formatados.
-usage() { echo "Usage: $0 [-c <regex>] [-s <mindate>] [-e <maxdate>] [-u <user>] [-m <minPID>] [-M <maxPID>] [-p <num>] [-r] [-w] <sleepT>" 1>&2; exit 1; }
+usage() { echo "Usage: $0 [-c <regex>] [-s <mindate>] [-e <maxdate>] [-u <user>]\
+ [-m <minPID>] [-M <maxPID>] [-p <num>] [-r] [-w] <sleepT>" 1>&2; exit 1; }
 
 # VP - Verificação de Processos
 
 regex_positive_int='^[0-9]+$'
 
-while getopts ":c:s:e:u:m:M:p:rw" o; do
+while getopts "c:s:e:u:m:M:p:rw" o; do
     case "${o}" in
         c)
                 c="^${OPTARG}$"
@@ -62,7 +58,7 @@ while getopts ":c:s:e:u:m:M:p:rw" o; do
                 reverse="r"
                 ;;
         w)
-                column=5
+                column=7
                 ;;
         *)
                 usage
@@ -71,7 +67,8 @@ while getopts ":c:s:e:u:m:M:p:rw" o; do
 done
 shift $((OPTIND-1))
 
-if [ -z "$1" ] || ! [[ $1 =~ $regex_positive_int ]] ; then
+if [ -z "$1" ] || ! [ -z "$2" ] ||
+ ! [[ $1 =~ $regex_positive_int ]] || [[ $1 -eq 0 ]]; then
         usage
 fi
 sleep_time=$1
@@ -97,11 +94,6 @@ do
         if ! [ -z "${c}" ] && ! [[ $comm =~ $c ]]; then
                 continue
         fi
-
-        # Condição que impede a listagem do próprio programa como um dos processos
-        # if [ "$comm" == "rwstat.sh" ]; then
-        #         continue
-        # fi
 
         user=$(ps -o user $line | grep -v 'USER')
         # Condição que verifica se o user do processo é o mesmo que o que pode (ou não) ser dado
@@ -140,15 +132,16 @@ for ((j=1;j<$i;j++)) do
         fi
         finalr=$(cat /proc/${matrix[$j,3]}/io | grep "rchar:" | awk '{print $2}')
         finalw=$(cat /proc/${matrix[$j,3]}/io | grep "wchar:" | awk '{print $2}')
-        matrix[$j,6]=$(echo "scale=2; ($finalr-${matrix[$j,4]}) / $sleep_time" | bc)
-        matrix[$j,7]=$(echo "scale=2; ($finalw-${matrix[$j,5]}) / $sleep_time" | bc)
-        matrix[$j,4]=$finalr
-        matrix[$j,5]=$finalw
+        matrix[$j,4]=$(echo "scale=2; ($finalr-${matrix[$j,4]})" | bc)
+        matrix[$j,5]=$(echo "scale=2; ($finalw-${matrix[$j,5]})" | bc)
+        matrix[$j,6]=$(echo "scale=2; ${matrix[$j,4]} / $sleep_time" | bc | awk '{printf "%.2f\n", $0}')
+        matrix[$j,7]=$(echo "scale=2; ${matrix[$j,5]} / $sleep_time" | bc | awk '{printf "%.2f\n", $0}')
+
 done
 
 # DI - Display de Informação
 
-printf "%-20s%-9s%6s%11s%12s%11s%14s%14s\n" "COMM" "USER" "PID" "READB" "WRITEB" "RATER"\
+printf "%-20s%-9s%6s%11s%12s%12s%14s%14s\n" "COMM" "USER" "PID" "READB" "WRITEB" "RATER"\
         "RATEW" "DATE"
 
 for ((j=1;j<$i;j++)) do
@@ -159,4 +152,5 @@ for ((j=1;j<$i;j++)) do
         printf "%-20s \b%-9s \b%6s \b%11s \b%12s \b%12s \b%14s \b%14s\n" "${matrix[$j,1]}" "${matrix[$j,2]}" "${matrix[$j,3]}" "${matrix[$j,4]}" "${matrix[$j,5]}"\
                 "${matrix[$j,6]}" "${matrix[$j,7]}" "${matrix[$j,8]}"
 done |
-sort -t $'\b' -"$reverse"g -k"$column" | ( ! [ -z "$p" ] && awk "NR<=$p" || awk "NR>0")
+ sort -t $'\b' -"$reverse"g -k"$column" |
+  ( ! [ -z "$p" ] && awk "NR<=$p" || awk "NR>0")
