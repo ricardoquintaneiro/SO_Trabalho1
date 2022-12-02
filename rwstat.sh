@@ -2,11 +2,12 @@
 
 # Aqui, em vez de declararmos arrays para read e write, podemos declarar uma matrix, em que cada linha é um processo e cada coluna é uma informação relativa ao processo
 
+export LANG=en_US.UTF-8
+export LANGUAGE=en
 declare -A matrix
 column=6
 reverse=""
 
-export LC_NUMERIC="en_US.UTF-8"
 
 # Mensagem que demonstra quais opções podem ser utilizadas ao executar este ficheiro. Esta mensagem aparece quando os argumentos de entrada não estão bem formatados.
 usage() { echo "Usage: $0 [-c <regex>] [-s <mindate>] [-e <maxdate>] [-u <user>]\
@@ -50,7 +51,7 @@ while getopts "c:s:e:u:m:M:p:rw" o; do
                 ;;
         p)
                 p=${OPTARG}
-                if ! [[ $p =~ $regex_positive_int ]] ; then
+                if ! [[ $p =~ $regex_positive_int ]] || [[ $p -eq 0 ]]; then
                         usage
                 fi
                 ;;
